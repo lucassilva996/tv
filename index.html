@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="TV">
+<title>TV</title>
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.png">
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: #0f1012; color: #e9e9ec; font: 16px -apple-system, Helvetica, Arial, sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; background: #0f1012; padding: 10px 12px 8px; border-bottom: 1px solid #24262b; }
+  h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; }
+  .row { display: flex; }
+  .row > * + * { margin-left: 8px; }
+  select, input, button { font: inherit; color: inherit; background: #1b1d21; border: 1px solid #2d3036; border-radius: 8px; padding: 9px 10px; }
+  select { flex: 0 0 42%; }
+  input { flex: 1 1 auto; min-width: 0; -webkit-appearance: none; }
+  button { cursor: pointer; }
+  #custom { display: none; margin-top: 8px; }
+  #status { font-size: 13px; color: #9a9ca3; margin-top: 6px; min-height: 16px; }
+  #player { display: none; background: #000; position: sticky; top: 0; z-index: 3; }
+  #player video { display: block; width: 100%; max-height: 46vh; background: #000; }
+  #nowbar { display: flex; align-items: center; padding: 6px 12px; background: #17181b; font-size: 14px; }
+  #nowname { flex: 1 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #nowbar a, #nowbar button { margin-left: 8px; font-size: 13px; padding: 6px 9px; color: #e9e9ec; text-decoration: none; background: #26282d; border: 0; border-radius: 6px; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; align-items: center; padding: 8px 12px; border-bottom: 1px solid #1d1f23; min-height: 56px; }
+  li:active { background: #1b1d21; }
+  li img, li .ph { width: 54px; height: 36px; object-fit: contain; margin-right: 12px; flex: 0 0 54px; background: #1b1d21; border-radius: 4px; }
+  li .t { flex: 1 1 auto; min-width: 0; }
+  li .n { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  li .g { font-size: 12px; color: #8d9097; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  li .fav { flex: 0 0 auto; font-size: 22px; color: #55585f; padding: 4px 6px 4px 12px; }
+  li .fav.on { color: #f2c14e; }
+  #more { display: none; width: calc(100% - 24px); margin: 12px; }
+  .note { font-size: 12px; color: #6f727a; padding: 14px 12px 40px; line-height: 1.45; }
+</style>
+</head>
+<body>
+<div id="player">
+  <video id="video" controls playsinline webkit-playsinline preload="none"></video>
+  <div id="nowbar">
+    <span id="nowname"></span>
+    <a id="direct" href="#" target="_blank">Abrir direto</a>
+    <button id="close" type="button">Fechar</button>
+  </div>
+</div>
+<header>
+  <h1>TV</h1>
+  <div class="row">
+    <select id="list">
+      <option value="fav">★ Favoritos</option>
+      <option value="https://iptv-org.github.io/iptv/countries/br.m3u" selected>Brasil</option>
+      <option value="https://iptv-org.github.io/iptv/languages/por.m3u">Em português</option>
+      <option value="https://iptv-org.github.io/iptv/categories/religious.m3u">Religiosos</option>
+      <option value="https://iptv-org.github.io/iptv/categories/news.m3u">Notícias</option>
+      <option value="https://iptv-org.github.io/iptv/categories/kids.m3u">Infantil</option>
+      <option value="https://iptv-org.github.io/iptv/categories/music.m3u">Música</option>
+      <option value="https://iptv-org.github.io/iptv/categories/movies.m3u">Filmes</option>
+      <option value="custom">Minha lista (URL)…</option>
+    </select>
+    <input id="q" type="search" placeholder="Buscar canal" autocomplete="off" autocorrect="off">
+  </div>
+  <div id="custom" class="row">
+    <input id="curl" type="url" placeholder="https://…/lista.m3u" autocapitalize="off" autocorrect="off">
+    <button id="cgo" type="button">Carregar</button>
+  </div>
+  <div id="status"></div>
+</header>
+<ul id="items"></ul>
+<button id="more" type="button">Mostrar mais</button>
+<p class="note">Listas públicas e gratuitas do projeto iptv-org. Muitos canais saem do ar ou mudam de endereço; se um não abrir, tente outro ou use “Abrir direto”. Canais marcados [Geo-blocked] só funcionam no país de origem.</p>
+
+<script>
+(function () {
+  var PAGE = 80;
+  var all = [], shown = [], rendered = 0;
+  var $ = function (id) { return document.getElementById(id); };
+  var listSel = $('list'), q = $('q'), ul = $('items'), status = $('status');
+  var video = $('video'), player = $('player');
+
+  function store(k, v) { try { if (v === undefined) return JSON.parse(localStorage.getItem(k)); localStorage.setItem(k, JSON.stringify(v)); } catch (e) { return null; } }
+  var favs = store('tv.favs') || [];
+
+  function attr(line, name) {
+    var m = line.match(new RegExp(name + '="([^"]*)"'));
+    return m ? m[1] : '';
+  }
+
+  function parse(text) {
+    var lines = text.split(/\r?\n/), out = [], cur = null, seen = {};
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i].replace(/^\s+|\s+$/g, '');
+      if (!l) continue;
+      if (l.indexOf('#EXTINF') === 0) {
+        var c = l.lastIndexOf('",');
+        var name = c > -1 ? l.slice(c + 2) : l.slice(l.indexOf(',') + 1);
+        cur = { name: name.replace(/^\s+|\s+$/g, ''), logo: attr(l, 'tvg-logo'), group: attr(l, 'group-title').replace(/;/g, ' · ') };
+      } else if (l.charAt(0) !== '#' && cur) {
+        if (!seen[l]) { cur.url = l; out.push(cur); seen[l] = 1; }
+        cur = null;
+      }
+    }
+    return out;
+  }
+
+  function load(url) {
+    status.textContent = 'Carregando lista…';
+    ul.innerHTML = ''; $('more').style.display = 'none';
+    var x = new XMLHttpRequest();
+    x.open('GET', url, true);
+    x.timeout = 30000;
+    x.onload = function () {
+      if (x.status >= 200 && x.status < 300) {
+        all = parse(x.responseText);
+        try { localStorage.setItem('tv.list.' + url, x.responseText); } catch (e) {}
+        filter();
+      } else { fallback('Erro ao carregar a lista (' + x.status + ').'); }
+    };
+    x.onerror = x.ontimeout = function () { fallback('Não foi possível carregar a lista. Verifique a internet ou o endereço.'); };
+    function fallback(msg) {
+      var saved = null;
+      try { saved = localStorage.getItem('tv.list.' + url); } catch (e) {}
+      if (saved) { all = parse(saved); filter(); status.textContent += ' (lista salva; sem conexão)'; }
+      else status.textContent = msg;
+    }
+    x.send();
+  }
+
+  function isFav(u) { return favs.indexOf(u) > -1; }
+
+  function filter() {
+    var term = q.value.toLowerCase();
+    shown = [];
+    for (var i = 0; i < all.length; i++) {
+      var c = all[i];
+      if (!term || (c.name + ' ' + c.group).toLowerCase().indexOf(term) > -1) shown.push(c);
+    }
+    ul.innerHTML = ''; rendered = 0;
+    renderMore();
+    status.textContent = shown.length + ' canais' + (term ? ' encontrados' : '');
+  }
+
+  function renderMore() {
+    var frag = document.createDocumentFragment();
+    var end = Math.min(rendered + PAGE, shown.length);
+    for (var i = rendered; i < end; i++) frag.appendChild(row(shown[i], i));
+    ul.appendChild(frag);
+    rendered = end;
+    $('more').style.display = rendered < shown.length ? 'block' : 'none';
+  }
+
+  function row(c, i) {
+    var li = document.createElement('li');
+    li.setAttribute('data-i', i);
+    var img;
+    if (c.logo) { img = document.createElement('img'); img.src = c.logo; img.onerror = function () { this.style.visibility = 'hidden'; }; }
+    else { img = document.createElement('div'); img.className = 'ph'; }
+    var t = document.createElement('div'); t.className = 't';
+    var n = document.createElement('div'); n.className = 'n'; n.textContent = c.name;
+    var g = document.createElement('div'); g.className = 'g'; g.textContent = c.group || '';
+    t.appendChild(n); t.appendChild(g);
+    var f = document.createElement('span'); f.className = 'fav' + (isFav(c.url) ? ' on' : ''); f.textContent = '★'; f.setAttribute('data-fav', '1');
+    li.appendChild(img); li.appendChild(t); li.appendChild(f);
+    return li;
+  }
+
+  function play(c) {
+    player.style.display = 'block';
+    $('nowname').textContent = c.name;
+    $('direct').href = c.url;
+    video.src = c.url;
+    video.load();
+    var p = video.play();
+    if (p && p.catch) p.catch(function () {});
+    window.scrollTo(0, 0);
+  }
+
+  function toggleFav(c, el) {
+    var favList = store('tv.favitems') || [];
+    var k = favs.indexOf(c.url);
+    if (k > -1) {
+      favs.splice(k, 1);
+      for (var j = 0; j < favList.length; j++) if (favList[j].url === c.url) { favList.splice(j, 1); break; }
+      el.className = 'fav';
+    } else {
+      favs.push(c.url); favList.push(c); el.className = 'fav on';
+    }
+    store('tv.favs', favs); store('tv.favitems', favList);
+    if (listSel.value === 'fav') { all = favList; filter(); }
+  }
+
+  ul.addEventListener('click', function (e) {
+    var el = e.target;
+    while (el && el.tagName !== 'LI') { if (el.getAttribute && el.getAttribute('data-fav')) var favEl = el; el = el.parentNode; }
+    if (!el) return;
+    var c = shown[+el.getAttribute('data-i')];
+    if (favEl) toggleFav(c, favEl); else play(c);
+  });
+
+  video.addEventListener('error', function () {
+    status.textContent = 'Este canal não abriu aqui. Tente “Abrir direto” ou outro canal.';
+  });
+
+  $('close').addEventListener('click', function () { video.pause(); video.removeAttribute('src'); video.load(); player.style.display = 'none'; });
+  $('more').addEventListener('click', renderMore);
+  var timer;
+  q.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(filter, 250); });
+
+  function choose() {
+    var v = listSel.value;
+    $('custom').style.display = v === 'custom' ? 'flex' : 'none';
+    if (v === 'fav') { all = store('tv.favitems') || []; filter(); if (!all.length) status.textContent = 'Toque na ★ de um canal para salvá-lo aqui.'; }
+    else if (v === 'custom') { $('curl').value = store('tv.custom') || ''; if ($('curl').value) load($('curl').value); else { ul.innerHTML = ''; status.textContent = 'Cole o endereço de uma lista .m3u.'; } }
+    else load(v);
+    store('tv.sel', v);
+  }
+  listSel.addEventListener('change', choose);
+  $('cgo').addEventListener('click', function () { var u = $('curl').value.replace(/^\s+|\s+$/g, ''); if (u) { store('tv.custom', u); load(u); } });
+
+  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    navigator.serviceWorker.register('sw.js').catch(function () {});
+  }
+
+  var sel = store('tv.sel');
+  if (sel) listSel.value = sel;
+  choose();
+})();
+</script>
+</body>
+</html>
