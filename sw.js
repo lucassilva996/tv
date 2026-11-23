@@ -1,6 +1,6 @@
 // Guarda a página no iPad para ela abrir mesmo sem acesso ao site.
 // Rede primeiro (para receber atualizações); cache como reserva.
-var CACHE = 'tv-v1';
+var CACHE = 'tv-v2';
 var FILES = ['./', './index.html', './icon.png'];
 
 self.addEventListener('install', function (e) {
