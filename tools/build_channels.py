@@ -268,6 +268,11 @@ def main():
         json.dump(state, f, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
     keep = {os.path.basename(l) for l in logos if l}
+    try:
+        keep |= build_radios()
+    except Exception as e:  # rádios são extra: não derrubam a lista de canais
+        log("rádios ignoradas:", e)
+        keep |= {fn for fn in os.listdir(LOGOS)}
     for fn in os.listdir(LOGOS):
         if fn not in keep:
             os.remove(os.path.join(LOGOS, fn))
@@ -277,5 +282,74 @@ def main():
     log(f"total {len(channels)} canais, {len(keep)} logos, {time.time() - t0:.0f}s")
 
 
+# ------------------------------------------------------------------ Rádios
+RADIO_API = ("https://de1.api.radio-browser.info/json/stations/search?countrycode=BR"
+             "&hidebroken=true&order=clickcount&reverse=true&limit=400")
+RADIO_CATS = [  # (id, nome, palavras nas tags)
+    ("news", "Notícias", ("news", "talk", "journalism", "noticias", "jornalismo")),
+    ("sports", "Esportes", ("sport", "futebol", "esporte")),
+    ("gospel", "Gospel", ("gospel", "christian", "cristã", "crista", "religio", "catolica", "católica", "evangel")),
+    ("sertanejo", "Sertanejo", ("sertanejo", "country", "modao", "modão")),
+    ("mpb", "MPB", ("mpb", "brazilian music", "musica brasileira", "samba", "bossa")),
+    ("pop", "Pop e Rock", ("pop", "rock", "hits", "chr", "dance")),
+    ("flash", "Flashback", ("flashback", "80s", "90s", "70s", "oldies", "classic", "nostalgia")),
+]
+
+
+def check_radio(url, is_hls):
+    try:
+        status, final, body = http_get(url, 16_000, 8)
+        if status != 200:
+            return False
+        if is_hls:
+            return b"#EXTM3U" in body[:300]
+        return len(body) > 2000
+    except Exception:
+        return False
+
+
+def build_radios():
+    t0 = time.time()
+    req = urllib.request.Request(RADIO_API, headers={"User-Agent": "tv-ipad/1.0"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        stations = json.loads(r.read())
+    seen, cands = set(), []
+    for s in stations:
+        codec = (s.get("codec") or "").upper()
+        if codec not in ("MP3", "AAC", "AAC+") and not s.get("hls"):
+            continue
+        name = re.sub(r"\s+", " ", s["name"]).strip()
+        k = norm(name)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        cands.append({"n": name, "u": s["url_resolved"], "hls": bool(s.get("hls")),
+                      "logo": s.get("favicon") or "", "tags": (s.get("tags") or "").lower()})
+    # https primeiro (http pode ser bloqueado numa página https)
+    cands.sort(key=lambda c: c["u"].startswith("http:"))
+    with ThreadPoolExecutor(WORKERS) as ex:
+        ok = list(ex.map(lambda c: check_radio(c["u"], c["hls"]), cands))
+    alive = [c for c, good in zip(cands, ok) if good][:200]
+    with ThreadPoolExecutor(16) as ex:
+        logos = list(ex.map(lambda c: logo_file(c["logo"]), alive))
+    out = []
+    for c, logo in zip(alive, logos):
+        tags = c["tags"]
+        item = {"n": c["n"], "u": c["u"], "c": [cid for cid, _, words in RADIO_CATS if any(w in tags for w in words)]}
+        if logo:
+            item["l"] = logo
+        out.append(item)
+    data = {"updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "cats": [{"id": cid, "name": name} for cid, name, _ in RADIO_CATS], "radios": out}
+    with open(os.path.join(ROOT, "radios.json"), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    log(f"rádios: {len(out)} no ar de {len(cands)} ({time.time() - t0:.0f}s)")
+    return {os.path.basename(l) for l in logos if l}
+
+
 if __name__ == "__main__":
-    main()
+    if "--radios" in sys.argv:
+        os.makedirs(LOGOS, exist_ok=True)
+        build_radios()
+    else:
+        main()

@@ -27,7 +27,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898099+github-actions[bot]@users.noreply.github.com"
-          git add -A channels.json state.json logos
+          git add -A channels.json radios.json state.json logos
           if git diff --cached --quiet; then echo "sem mudanças"; exit 0; fi
           git commit -m "Atualiza lista de canais"
           git push
